@@ -79,7 +79,7 @@ resource "aws_subnet" "private" {
 ###########################
 
 resource "aws_eip" "nat" {
-  count = var.create_nat_gateway ? 1 : 0
+  count  = var.create_nat_gateway ? 1 : 0
   domain = "vpc"
   tags = {
     Name        = "${var.project_prefix}-nat-eip"
@@ -91,7 +91,7 @@ resource "aws_eip" "nat" {
 resource "aws_nat_gateway" "nat" {
   count         = var.create_nat_gateway ? 1 : 0
   allocation_id = aws_eip.nat[0].id
-  subnet_id     = aws_subnet.public["0"].id  # place NAT in the first public subnet
+  subnet_id     = aws_subnet.public["0"].id # place NAT in the first public subnet
 
   tags = {
     Name        = "${var.project_prefix}-natgw"
@@ -139,7 +139,7 @@ resource "aws_route_table" "private" {
 
 # Private subnets route either via NAT (if enabled) or remain isolated (if disabled)
 resource "aws_route" "private_default" {
-  for_each = var.create_nat_gateway ? aws_route_table.private : {}
+  for_each               = var.create_nat_gateway ? aws_route_table.private : {}
   route_table_id         = each.value.id
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = aws_nat_gateway.nat[0].id
@@ -253,13 +253,13 @@ resource "aws_security_group" "airflow" {
 
 # Optional controlled admin access (8080) if CIDRs are provided
 resource "aws_security_group_rule" "airflow_admin" {
-  for_each                = length(var.allowed_admin_cidrs) > 0 ? toset(var.allowed_admin_cidrs) : toset([])
-  type                    = "ingress"
-  from_port               = 8080
-  to_port                 = 8080
-  protocol                = "tcp"
-  cidr_blocks             = [each.value]
-  security_group_id       = aws_security_group.airflow.id
+  for_each          = length(var.allowed_admin_cidrs) > 0 ? toset(var.allowed_admin_cidrs) : toset([])
+  type              = "ingress"
+  from_port         = 8080
+  to_port           = 8080
+  protocol          = "tcp"
+  cidr_blocks       = [each.value]
+  security_group_id = aws_security_group.airflow.id
 }
 
 ###########################
@@ -325,11 +325,11 @@ locals {
 }
 
 resource "aws_vpc_endpoint" "interfaces" {
-  for_each          = var.create_vpc_endpoints ? toset(local.interface_services) : toset([])
-  vpc_id            = aws_vpc.this.id
-  service_name      = "com.amazonaws.${data.aws_region.current.id}.${each.key}"
-  vpc_endpoint_type = "Interface"
-  subnet_ids        = [for s in aws_subnet.private : s.id]
+  for_each           = var.create_vpc_endpoints ? toset(local.interface_services) : toset([])
+  vpc_id             = aws_vpc.this.id
+  service_name       = "com.amazonaws.${data.aws_region.current.id}.${each.key}"
+  vpc_endpoint_type  = "Interface"
+  subnet_ids         = [for s in aws_subnet.private : s.id]
   security_group_ids = var.create_vpc_endpoints ? [aws_security_group.endpoints[0].id] : []
 
   private_dns_enabled = true

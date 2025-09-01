@@ -39,7 +39,7 @@ resource "aws_iam_role_policy_attachment" "cw_agent" {
 # Minimal ECR pull permissions (auth + pull) and basic Logs
 data "aws_iam_policy_document" "inline" {
   statement {
-    sid     = "EcrPull"
+    sid = "EcrPull"
     actions = [
       "ecr:GetAuthorizationToken",
       "ecr:BatchCheckLayerAvailability",
@@ -50,7 +50,7 @@ data "aws_iam_policy_document" "inline" {
   }
 
   statement {
-    sid     = "LogsBasic"
+    sid = "LogsBasic"
     actions = [
       "logs:CreateLogGroup",
       "logs:CreateLogStream",
@@ -64,7 +64,7 @@ data "aws_iam_policy_document" "inline" {
   dynamic "statement" {
     for_each = length(var.s3_bucket_arns) > 0 ? [1] : []
     content {
-      sid     = "S3AccessScoped"
+      sid = "S3AccessScoped"
       actions = [
         "s3:GetObject", "s3:PutObject", "s3:ListBucket",
         "s3:GetBucketLocation"
