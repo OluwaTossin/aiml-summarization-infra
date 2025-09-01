@@ -10,11 +10,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Format
-        run: terraform fmt -check -recursive
+      # Auto-format files in-place
+      - name: Terraform Format (autofix)
+        run: terraform fmt -recursive
+
+      # Fail if formatting changed any tracked file
+      - name: Check formatting is clean
+        run: |
+          git status --porcelain
+          git diff --exit-code
 
       - name: TFLint
         uses: terraform-linters/setup-tflint@v3

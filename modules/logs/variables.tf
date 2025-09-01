@@ -5,7 +5,7 @@ variable "project_prefix" {
 variable "log_group_names" {
   type        = list(string)
   description = "List of log group names to create"
-  default     = [
+  default = [
     "/aiml/prod/app",
     "/aiml/prod/airflow",
     "/aiml/prod/infra"
