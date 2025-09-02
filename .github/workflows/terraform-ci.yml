@@ -1,25 +1,31 @@
 name: Terraform CI
-
 on:
   pull_request:
   push:
     branches: [ main ]
+permissions:
+  contents: write
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # Auto-format files in-place
       - name: Terraform Format (autofix)
         run: terraform fmt -recursive
 
-      # Fail if formatting changed any tracked file
+      - name: Auto-commit formatted files (PR branches)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(fmt): terraform auto-format"
+          branch: ${{ github.head_ref }}
+
       - name: Check formatting is clean
+        if: ${{ github.event_name != 'pull_request' }}
         run: |
           git status --porcelain
           git diff --exit-code
