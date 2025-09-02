@@ -16,8 +16,4 @@ variable "dynamodb_table_name" {
   default     = "tf-state-locks"
 }
 
-variable "s3_acl" {
-  description = "Bucket ownership mode; ACLs disabled with BucketOwnerEnforced."
-  type        = string
-  default     = "private"
-}
+

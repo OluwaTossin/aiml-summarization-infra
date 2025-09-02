@@ -1,6 +1,3 @@
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-
 #############################
 # EC2 Instance Role for Airflow/App nodes (SSM-first)
 #############################
