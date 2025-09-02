@@ -62,7 +62,7 @@ module "iam" {
       module.s3_data.bucket_arn_with_wildcard
     ]
   )
-    # NEW: pass through github repo for OIDC trust
+  # NEW: pass through github repo for OIDC trust
   github_repo = var.github_repo
 }
 
