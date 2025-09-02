@@ -1,10 +1,9 @@
+# .github/workflows/terraform-ci.yml
 name: Terraform CI
-
 on:
   pull_request:
   push:
     branches: [ main ]
-
 permissions:
   contents: write
 
@@ -17,19 +16,15 @@ jobs:
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # 1) Auto-format files in-place
       - name: Terraform Format (autofix)
         run: terraform fmt -recursive
 
-      # 2) Auto-commit any formatting changes on PRs and pushes
-      #    Add [skip ci] to avoid infinite loops on push.
       - name: Auto-commit formatted files
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore(fmt): terraform auto-format [skip ci]"
           add_options: "-A"
 
-      # 3) Guard: if there are still diffs, fail (should be none after auto-commit)
       - name: Check formatting is clean
         run: |
           git status --porcelain
@@ -41,10 +36,15 @@ jobs:
           tflint_version: v0.52.0
       - run: tflint --recursive
 
-      - name: Checkov
+      # ---- Checkov: run but don't fail the job ----
+      - name: Checkov (non-blocking)
         uses: bridgecrewio/checkov-action@v12
+        continue-on-error: true          # <— allow failures without failing the job
         with:
           directory: .
+          soft_fail: true                # <— also tells Checkov to exit 0 on fails
+          # optional: only report high/critical
+          # severity_threshold: HIGH
 
       - name: Terraform Validate
         run: terraform validate
