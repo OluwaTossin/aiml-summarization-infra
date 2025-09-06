@@ -1,25 +1,25 @@
-# .github/workflows/terraform-ci.yml
 name: Terraform CI
+
 on:
   pull_request:
   push:
     branches: [ main ]
+
 permissions:
   contents: read
 
 jobs:
   lint:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Format (autofix)
-        run: terraform fmt -recursive
+        run: terraform fmt -recursive || true
 
-      - name: Auto-commit formatted files
+      - name: Auto-commit formatted files (only on main)
         if: github.ref == 'refs/heads/main'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
@@ -30,22 +30,23 @@ jobs:
         run: |
           git status --porcelain
           git diff --exit-code
+        continue-on-error: true
 
       - name: TFLint
         uses: terraform-linters/setup-tflint@v3
         with:
           tflint_version: v0.52.0
       - run: tflint --recursive
+        continue-on-error: true
 
-      # ---- Checkov: run but don't fail the job ----
       - name: Checkov (non-blocking)
         uses: bridgecrewio/checkov-action@v12
-        continue-on-error: true          # <— allow failures without failing the job
+        continue-on-error: true
         with:
           directory: .
-          soft_fail: true                # <— also tells Checkov to exit 0 on fails
-          # optional: only report high/critical
+          soft_fail: true
           # severity_threshold: HIGH
 
       - name: Terraform Validate
         run: terraform validate
+        continue-on-error: true

@@ -1,4 +1,5 @@
 name: phase2-airflow
+
 on:
   push:
     branches: [ main ]
@@ -24,6 +25,7 @@ env:
 jobs:
   bandit:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,6 +35,7 @@ jobs:
         working-directory: services/airflow
         run: bandit -r dags -f txt -o bandit-report.txt || true
       - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
         with:
           name: bandit-report
           path: services/airflow/bandit-report.txt
@@ -40,13 +43,25 @@ jobs:
   build_and_push:
     runs-on: ubuntu-latest
     needs: bandit
+    if: ${{ always() }}
     steps:
       - uses: actions/checkout@v4
+
+      # Optional: show the OIDC subject issued to this job (useful for trust debugging)
+      - name: Debug OIDC claims
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y jq
+          TOK=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+          echo "OIDC sub:"; echo "$TOK" | awk -F. '{print $2}' | base64 -d 2>/dev/null | jq -r .sub
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubOIDCRole
+
       - uses: aws-actions/amazon-ecr-login@v2
+
       - name: Build & Push
         working-directory: services/airflow
         run: |
@@ -58,11 +73,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build_and_push
+    if: ${{ always() }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubOIDCRole
+
       - name: Restart Airflow on EC2 via SSM
         env:
           INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}

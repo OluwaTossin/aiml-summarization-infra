@@ -1,77 +1,78 @@
-# --- OIDC provider handling ---
-
+# --- OIDC provider controls ---
 variable "create_github_oidc_provider" {
-  description = "If true, create the IAM OIDC provider; otherwise supply existing_github_oidc_provider_arn."
+  description = "Create the IAM OIDC provider for GitHub. If false, you must supply existing_github_oidc_provider_arn."
   type        = bool
   default     = false
 }
 
 variable "existing_github_oidc_provider_arn" {
-  description = "Existing OIDC provider ARN (arn:aws:iam::<acct>:oidc-provider/token.actions.githubusercontent.com). Required when create_github_oidc_provider = false."
+  description = "Pre-existing OIDC provider ARN (arn:aws:iam::<acct>:oidc-provider/token.actions.githubusercontent.com) when not creating."
   type        = string
   default     = ""
 }
 
-# --- Core inputs used by this module ---
-
-variable "aws_region" {
-  description = "AWS region used for ARNs and ECR scope."
-  type        = string
+# Optional: allow this module to create GitHub Actions repo variables via API.
+# Leave false if you don't want/need this or don't have a PAT with Actions write.
+variable "create_actions_variables" {
+  description = "If true, create GitHub Actions repository variables (requires PAT with Actions: Read/Write)."
+  type        = bool
+  default     = false
 }
 
+# --- Core parameters used by the module ---
+variable "aws_region" { type = string }
+
 variable "github_owner" {
-  description = "GitHub org/user (e.g., OluwaTossin)."
+  description = "GitHub org/user (e.g., OluwaTossin)"
   type        = string
 }
 
 variable "github_repo" {
-  description = "GitHub repository name (e.g., AIML-SUMMARIZATION-INFRA)."
+  description = "GitHub repository name (e.g., aiml-summarization-infra)"
   type        = string
 }
 
 variable "github_branch" {
-  description = "Branch to bind in OIDC trust (refs/heads/<branch>)."
+  description = "Branch protected for OIDC (e.g., main)"
   type        = string
   default     = "main"
 }
 
 variable "role_name" {
-  description = "Name for the IAM role assumed by GitHub Actions via OIDC."
+  description = "Name of the IAM role assumed by GitHub Actions"
   type        = string
   default     = "GitHubOIDCRole"
 }
 
 variable "ecr_repo_name" {
-  description = "ECR repository name that CI will push to (e.g., aiml/airflow)."
+  description = "Target ECR repository name for pushes"
   type        = string
-  default     = "aiml/airflow"
+  default     = "aiml-airflow-image"
 }
 
 variable "ec2_instance_id" {
-  description = "Target EC2 instance ID for SSM SendCommand during deploy."
+  description = "EC2 instance ID that SSM will target for deploy"
   type        = string
 }
 
-# --- Data flow variables exported as GitHub Actions variables ---
-
 variable "raw_bucket" {
-  description = "S3 bucket for raw inputs."
+  description = "S3 bucket for raw inputs"
   type        = string
 }
 
 variable "processed_bucket" {
-  description = "S3 bucket for processed outputs."
+  description = "S3 bucket for processed/summarized outputs"
   type        = string
 }
 
 variable "s3_input_prefix" {
-  description = "S3 prefix for raw inputs."
+  description = "S3 prefix for raw inputs"
   type        = string
   default     = "raw/"
 }
 
 variable "s3_output_prefix" {
-  description = "S3 prefix for processed outputs."
+  description = "S3 prefix for processed outputs"
   type        = string
   default     = "processed/"
 }
