@@ -52,11 +52,9 @@ jobs:
 
       - name: Preflight — check secrets presence
         run: |
-            [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || { echo "::error::Missing repo secret AWS_ACCESS_KEY_ID"; exit 1; }
-            [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] || { echo "::error::Missing repo secret AWS_SECRET_ACCESS_KEY"; exit 1; }
+          [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || { echo "::error::Missing repo secret AWS_ACCESS_KEY_ID"; exit 1; }
+          [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] || { echo "::error::Missing repo secret AWS_SECRET_ACCESS_KEY"; exit 1; }
 
-
-      # Use static access keys from GitHub Secrets
       - name: Configure AWS creds (static)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -82,7 +80,7 @@ jobs:
           docker push "$IMAGE_URI:latest"
           echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
-    deploy:
+  deploy:
     runs-on: ubuntu-latest
     needs: build_and_push
     steps:
@@ -143,15 +141,14 @@ jobs:
           }
           JSON
 
-          # Replace placeholders with actual values on the runner (no escaping headaches).
-          sed -i "s|__REGION__|${REGION}|g"        payload.json
-          sed -i "s|__IMAGE_URI__|${IMAGE_URI}|g"  payload.json
-          sed -i "s|__RAW__|${RAW_BUCKET}|g"       payload.json
+          # Replace placeholders with actual values on the runner.
+          sed -i "s|__REGION__|${REGION}|g"             payload.json
+          sed -i "s|__IMAGE_URI__|${IMAGE_URI}|g"       payload.json
+          sed -i "s|__RAW__|${RAW_BUCKET}|g"            payload.json
           sed -i "s|__PROCESSED__|${PROCESSED_BUCKET}|g" payload.json
-          sed -i "s|__INP__|${S3_INPUT_PREFIX}|g"  payload.json
-          sed -i "s|__OUT__|${S3_OUTPUT_PREFIX}|g" payload.json
+          sed -i "s|__INP__|${S3_INPUT_PREFIX}|g"       payload.json
+          sed -i "s|__OUT__|${S3_OUTPUT_PREFIX}|g"      payload.json
 
-          # Send to the instance
           aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
