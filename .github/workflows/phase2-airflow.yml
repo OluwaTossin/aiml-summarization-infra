@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}      # optional; we fall back to eu-west-1
+  AWS_REGION: ${{ vars.AWS_REGION }}      # optional; fallback handled below
   ECR_REPO: aiml-airflow-image
 
 jobs:
@@ -41,6 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_uri: ${{ steps.build.outputs.image_uri }}
+      image_tag: ${{ steps.build.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,16 +70,16 @@ jobs:
 
       - uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & Push
+      - name: Build & Push (SHA tag only)
         id: build
         working-directory: services/airflow
         run: |
           set -euo pipefail
-          GIT_SHA=$(git rev-parse --short HEAD)
-          docker build -t "$IMAGE_URI:$GIT_SHA" -t "$IMAGE_URI:latest" .
-          docker push "$IMAGE_URI:$GIT_SHA"
-          docker push "$IMAGE_URI:latest"
-          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+          IMAGE_TAG=$(git rev-parse --short HEAD)
+          docker build -t "$IMAGE_URI:$IMAGE_TAG" .
+          docker push "$IMAGE_URI:$IMAGE_TAG"
+          echo "image_uri=$IMAGE_URI"  >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
   deploy:
     runs-on: ubuntu-latest
@@ -95,7 +96,7 @@ jobs:
         env:
           INSTANCE_ID:      ${{ vars.EC2_INSTANCE_ID }}
           REGION:           ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
-          IMAGE_URI:        ${{ needs.build_and_push.outputs.image_uri }}
+          IMAGE_REF:        ${{ needs.build_and_push.outputs.image_uri }}:${{ needs.build_and_push.outputs.image_tag }}
           RAW_BUCKET:       ${{ vars.RAW_BUCKET }}
           PROCESSED_BUCKET: ${{ vars.PROCESSED_BUCKET }}
           S3_INPUT_PREFIX:  ${{ vars.S3_INPUT_PREFIX }}
@@ -109,16 +110,16 @@ jobs:
             "commands": [
               "set -euxo pipefail",
               "REGION=__REGION__",
-              "IMAGE_URI=__IMAGE_URI__",
+              "IMAGE_REF=__IMAGE_REF__",
               "RAW_BUCKET=__RAW__",
               "PROCESSED_BUCKET=__PROCESSED__",
               "S3_INPUT_PREFIX=__INP__",
               "S3_OUTPUT_PREFIX=__OUT__",
-              "ECR_REG=${IMAGE_URI%%/*}",
+              "ECR_REG=${IMAGE_REF%%/*}",
               "command -v docker || (apt-get update -y && apt-get install -y docker.io || yum install -y docker)",
               "systemctl enable --now docker || true",
               "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REG",
-              "docker pull ${IMAGE_URI}:latest",
+              "docker pull ${IMAGE_REF}",
               "docker rm -f airflow || true",
               "docker volume create airflow_home || true",
               "docker volume create airflow_logs || true",
@@ -134,20 +135,20 @@ jobs:
                  -e HF_MODEL_PATH=/opt/models/sshleifer/distilbart-cnn-12-6 \
                  -v airflow_home:/opt/airflow \
                  -v airflow_logs:/opt/airflow/logs \
-                 ${IMAGE_URI}:latest",
+                 ${IMAGE_REF}",
               "docker ps",
               "docker logs --tail 120 airflow || true"
             ]
           }
           JSON
 
-          # Replace placeholders with actual values on the runner.
-          sed -i "s|__REGION__|${REGION}|g"             payload.json
-          sed -i "s|__IMAGE_URI__|${IMAGE_URI}|g"       payload.json
-          sed -i "s|__RAW__|${RAW_BUCKET}|g"            payload.json
+          # Substitute placeholders.
+          sed -i "s|__REGION__|${REGION}|g"          payload.json
+          sed -i "s|__IMAGE_REF__|${IMAGE_REF}|g"    payload.json
+          sed -i "s|__RAW__|${RAW_BUCKET}|g"         payload.json
           sed -i "s|__PROCESSED__|${PROCESSED_BUCKET}|g" payload.json
-          sed -i "s|__INP__|${S3_INPUT_PREFIX}|g"       payload.json
-          sed -i "s|__OUT__|${S3_OUTPUT_PREFIX}|g"      payload.json
+          sed -i "s|__INP__|${S3_INPUT_PREFIX}|g"    payload.json
+          sed -i "s|__OUT__|${S3_OUTPUT_PREFIX}|g"   payload.json
 
           aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
