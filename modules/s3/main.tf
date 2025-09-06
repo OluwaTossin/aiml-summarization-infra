@@ -1,17 +1,35 @@
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
+# ---------------------------
+# Normalization & derivations
+# ---------------------------
 locals {
+  # Clean up optional inputs that may be null or empty strings
+  explicit_bucket_name_clean = (
+    var.explicit_bucket_name != null && var.explicit_bucket_name != "" ? var.explicit_bucket_name : null
+  )
+
+  kms_key_arn_clean = (
+    var.kms_key_arn != null && var.kms_key_arn != "" ? var.kms_key_arn : null
+  )
+
+  # Projected names
   inferred_name = lower(replace(
     "${var.project_prefix}-data-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.id}",
     "/[^a-z0-9-]/",
     "-"
   ))
 
-  bucket_name = var.explicit_bucket_name != "" ? var.explicit_bucket_name : local.inferred_name
-  use_kms     = var.kms_key_arn != ""
+  bucket_name = coalesce(local.explicit_bucket_name_clean, local.inferred_name)
+
+  # True only when we actually have a valid KMS key ARN
+  use_kms = local.kms_key_arn_clean != null
 }
 
+# -------------
+# S3 primitives
+# -------------
 resource "aws_s3_bucket" "data" {
   bucket        = local.bucket_name
   force_destroy = false
@@ -53,7 +71,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm     = local.use_kms ? "aws:kms" : "AES256"
-      kms_master_key_id = local.use_kms ? var.kms_key_arn : null
+      kms_master_key_id = local.use_kms ? local.kms_key_arn_clean : null
     }
     bucket_key_enabled = local.use_kms
   }
@@ -72,7 +90,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
   }
 }
 
-# ------- Correct, deduplicated, multi-line policy doc starts here -------
+# ----------------------------------------
+# Policy: TLS required; SSE rules enforced
+# ----------------------------------------
 data "aws_iam_policy_document" "bucket_policy" {
   # Deny any non-TLS access
   statement {
@@ -120,7 +140,7 @@ data "aws_iam_policy_document" "bucket_policy" {
     }
   }
 
-  # If KMS is used, require the correct KMS key
+  # If KMS is used, require the correct KMS key (only when a real ARN exists)
   dynamic "statement" {
     for_each = local.use_kms ? [1] : []
     content {
@@ -138,7 +158,7 @@ data "aws_iam_policy_document" "bucket_policy" {
       condition {
         test     = "StringNotEquals"
         variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
-        values   = [var.kms_key_arn]
+        values   = [local.kms_key_arn_clean] # <-- guaranteed non-null here
       }
     }
   }
@@ -166,7 +186,6 @@ data "aws_iam_policy_document" "bucket_policy" {
     }
   }
 }
-# ------- End policy doc -------
 
 resource "aws_s3_bucket_policy" "this" {
   bucket = aws_s3_bucket.data.id

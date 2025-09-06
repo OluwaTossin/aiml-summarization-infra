@@ -1,0 +1,102 @@
+name: phase2-airflow
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'services/airflow/**'
+      - '.github/workflows/phase2-airflow.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'services/airflow/**'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  ECR_REPO: aiml-airflow-image
+  IMAGE_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/aiml/airflow
+
+jobs:
+  bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install bandit
+      - name: Bandit scan
+        working-directory: services/airflow
+        run: bandit -r dags -f txt -o bandit-report.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: services/airflow/bandit-report.txt
+
+  build_and_push:
+    runs-on: ubuntu-latest
+    needs: bandit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubOIDCRole
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Build & Push
+        working-directory: services/airflow
+        run: |
+          GIT_SHA=$(git rev-parse --short HEAD)
+          docker build -t $IMAGE_URI:$GIT_SHA -t $IMAGE_URI:latest .
+          docker push $IMAGE_URI:$GIT_SHA
+          docker push $IMAGE_URI:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build_and_push
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubOIDCRole
+      - name: Restart Airflow on EC2 via SSM
+        env:
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+          IMAGE_URI: ${{ env.IMAGE_URI }}
+        run: |
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Phase2 Airflow rollout" \
+            --parameters commands='[
+              "set -euxo pipefail",
+              "REGION='${{ env.AWS_REGION }}'",
+              "ECR_REG='${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.'$REGION'.amazonaws.com'",
+              "command -v docker || (apt-get update -y && apt-get install -y docker.io || yum install -y docker)",
+              "systemctl enable --now docker || true",
+              "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REG",
+              "docker pull '"$IMAGE_URI"':latest",
+              "docker rm -f airflow || true",
+              "docker volume create airflow_home || true",
+              "docker volume create airflow_logs || true",
+              "docker run -d --name airflow -p 8080:8080 \
+                 -e AIRFLOW_ADMIN_USER=admin \
+                 -e AIRFLOW_ADMIN_PWD=$(aws ssm get-parameter --with-decryption --name /airflow/admin_pwd --region $REGION --query Parameter.Value --output text) \
+                 -e AIRFLOW_ADMIN_EMAIL=admin@example.com \
+                 -e AIRFLOW__CORE__LOAD_EXAMPLES=False \
+                 -e RAW_BUCKET=${{ vars.RAW_BUCKET }} \
+                 -e PROCESSED_BUCKET=${{ vars.PROCESSED_BUCKET }} \
+                 -e S3_INPUT_PREFIX=${{ vars.S3_INPUT_PREFIX }} \
+                 -e S3_OUTPUT_PREFIX=${{ vars.S3_OUTPUT_PREFIX }} \
+                 -e HF_MODEL_PATH=/opt/models/sshleifer/distilbart-cnn-12-6 \
+                 -v airflow_home:/opt/airflow \
+                 -v airflow_logs:/opt/airflow/logs \
+                 '"$IMAGE_URI"':latest",
+              "docker ps",
+              "docker logs --tail 120 airflow || true"
+            ]' \
+            --region "${{ env.AWS_REGION }}"

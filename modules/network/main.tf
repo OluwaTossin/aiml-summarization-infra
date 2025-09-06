@@ -9,11 +9,9 @@ locals {
 
   # For a /16 VPC and newbits=4, we have 16 possible /20s (indices 0..15).
   # Allocate public indices [0..az_count-1], then private indices [az_count..(2*az_count-1)].
-  # This avoids overlap and stays within bounds.
   public_subnet_cidrs  = [for i in range(var.az_count) : cidrsubnet(var.vpc_cidr, 4, i)]
   private_subnet_cidrs = [for i in range(var.az_count) : cidrsubnet(var.vpc_cidr, 4, i + var.az_count)]
 }
-
 
 ###########################
 # VPC & Internet Gateway
@@ -266,37 +264,31 @@ resource "aws_security_group_rule" "airflow_admin" {
 # VPC Endpoints (cost & privacy)
 ###########################
 
-# S3 Gateway endpoint (no SG required)
+# S3 Gateway endpoint (no SG required) — attach to ALL private RTs
 resource "aws_vpc_endpoint" "s3" {
   count             = var.create_vpc_endpoints ? 1 : 0
   vpc_id            = aws_vpc.this.id
   service_name      = "com.amazonaws.${data.aws_region.current.id}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.private["0"].id] # attach at least to one private RT
+
+  route_table_ids = [for rt in aws_route_table.private : rt.id]
+
   tags = {
     Name        = "${var.project_prefix}-vpce-s3"
     Project     = var.project_prefix
     Environment = "prod"
+    ManagedBy   = "Terraform"
   }
 }
 
-# Shared SG for interface endpoints (allow 443 from private subnets)
+# One SG for ALL interface endpoints — replaceable without churn
 resource "aws_security_group" "endpoints" {
-  count  = var.create_vpc_endpoints ? 1 : 0
-  name   = "${var.project_prefix}-endpoints-sg"
-  vpc_id = aws_vpc.this.id
+  count       = var.create_vpc_endpoints ? 1 : 0
+  name_prefix = "${var.project_prefix}-endpoints-"
+  description = "Interface VPC endpoints"
+  vpc_id      = aws_vpc.this.id
 
-  # Ingress 443 from private CIDRs
-  dynamic "ingress" {
-    for_each = var.create_vpc_endpoints ? toset(local.private_subnet_cidrs) : toset([])
-    content {
-      from_port   = 443
-      to_port     = 443
-      protocol    = "tcp"
-      cidr_blocks = [ingress.value]
-    }
-  }
-
+  # Egress open (endpoints initiate connections back to AWS services)
   egress {
     from_port   = 0
     to_port     = 0
@@ -304,14 +296,30 @@ resource "aws_security_group" "endpoints" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  lifecycle {
+    create_before_destroy = true
+  }
+
   tags = {
-    Name        = "${var.project_prefix}-endpoints-sg"
+    Name        = "${var.project_prefix}-endpoints"
     Project     = var.project_prefix
     Environment = "prod"
+    ManagedBy   = "Terraform"
   }
 }
 
-# Core interface endpoints to reduce NAT dependence
+# Ingress 443 to endpoints SG from each PRIVATE subnet CIDR (as separate resources aids replacement)
+resource "aws_security_group_rule" "endpoints_https_in" {
+  for_each          = var.create_vpc_endpoints ? aws_subnet.private : {}
+  type              = "ingress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = [each.value.cidr_block]
+  security_group_id = aws_security_group.endpoints[0].id
+}
+
+# Core interface endpoints needed for NAT-less private hosts (ECR, SSM, Logs)
 locals {
   interface_services = [
     "ecr.api",
@@ -320,23 +328,22 @@ locals {
     "ssm",
     "ssmmessages",
     "ec2messages"
-    # Add "monitoring" if you use CloudWatch agent scraping API
   ]
 }
 
 resource "aws_vpc_endpoint" "interfaces" {
-  for_each           = var.create_vpc_endpoints ? toset(local.interface_services) : toset([])
-  vpc_id             = aws_vpc.this.id
-  service_name       = "com.amazonaws.${data.aws_region.current.id}.${each.key}"
-  vpc_endpoint_type  = "Interface"
-  subnet_ids         = [for s in aws_subnet.private : s.id]
-  security_group_ids = var.create_vpc_endpoints ? [aws_security_group.endpoints[0].id] : []
-
+  for_each            = var.create_vpc_endpoints ? toset(local.interface_services) : toset([])
+  vpc_id              = aws_vpc.this.id
+  service_name        = "com.amazonaws.${data.aws_region.current.id}.${each.key}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [for s in aws_subnet.private : s.id]
+  security_group_ids  = [aws_security_group.endpoints[0].id] # explicit dep on replaceable SG
   private_dns_enabled = true
 
   tags = {
     Name        = "${var.project_prefix}-vpce-${each.key}"
     Project     = var.project_prefix
     Environment = "prod"
+    ManagedBy   = "Terraform"
   }
 }
