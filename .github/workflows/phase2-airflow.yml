@@ -16,11 +16,10 @@ permissions:
   id-token: write
   contents: read
 
-# Repo variables are still supported for the DAG inputs, but are now optional
+# You may move AWS_ACCOUNT_ID to Actions → Variables if you prefer.
 env:
-  # Optional; if empty we default to eu-west-1 inside the job
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  # The image repo name we push to (created by Terraform)
+  AWS_REGION: ${{ vars.AWS_REGION }}              # optional; we fall back to eu-west-1 if unset
+  AWS_ACCOUNT_ID: "455921291596"                  # <-- set your real account ID here
   ECR_REPO: aiml-airflow-image
 
 jobs:
@@ -51,12 +50,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Resolve region (fallback to eu-west-1)
-        id: region
         run: |
           REGION="${AWS_REGION:-}"
           if [ -z "$REGION" ]; then REGION="eu-west-1"; fi
-          echo "Resolved AWS region: $REGION"
-          echo "REGION=$REGION" >> $GITHUB_ENV
+          echo "REGION=$REGION" >> "$GITHUB_ENV"
 
       - name: Debug OIDC claims (optional)
         run: |
@@ -65,23 +62,17 @@ jobs:
                "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
           echo "OIDC sub:"; echo "$TOK" | awk -F. '{print $2}' | base64 -d 2>/dev/null | jq -r .sub
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Assume AWS role via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID && vars.AWS_ACCOUNT_ID || '000000000000' }}:role/GitHubOIDCRole
-          # The action requires a region even just to get the OIDC creds;
-          # use the env we resolved above
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubOIDCRole
           aws-region: ${{ env.REGION }}
 
-      # Discover the real account ID after assuming the role
-      - name: Discover AWS account & compute IMAGE_URI
-        id: compute
+      - name: Compute IMAGE_URI from assumed identity
         run: |
-          set -euo pipefail
           ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-          echo "ACCOUNT=$ACCOUNT"
-          IMAGE_URI="$ACCOUNT.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO}"
-          echo "IMAGE_URI=$IMAGE_URI"
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          echo "Assumed account: $ACCOUNT"
+          echo "IMAGE_URI=$ACCOUNT.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO}" >> "$GITHUB_ENV"
 
       - uses: aws-actions/amazon-ecr-login@v2
 
@@ -101,16 +92,15 @@ jobs:
     needs: build_and_push
     if: ${{ always() }}
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Assume AWS role via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          # Reuse the same region resolution rule
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubOIDCRole
           aws-region: ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID && vars.AWS_ACCOUNT_ID || '000000000000' }}:role/GitHubOIDCRole
 
       - name: Restart Airflow on EC2 via SSM
         env:
           INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
-          # use the image uri produced by the build job
           IMAGE_URI: ${{ needs.build_and_push.outputs.image_uri }}
           REGION: ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
         run: |
@@ -122,7 +112,6 @@ jobs:
               "set -euxo pipefail",
               "REGION='\''${REGION}'\'''",
               "IMAGE_URI='\''${IMAGE_URI}'\'''",
-              # Derive ECR registry from IMAGE_URI to avoid any hard-coded account/region
               "ECR_REG=$(echo \"${IMAGE_URI}\" | awk -F\"/\" '\''{print $1}'\'')",
               "command -v docker || (apt-get update -y && apt-get install -y docker.io || yum install -y docker)",
               "systemctl enable --now docker || true",
