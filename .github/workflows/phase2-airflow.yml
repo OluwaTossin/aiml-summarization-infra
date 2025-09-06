@@ -13,13 +13,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
 
-# You may move AWS_ACCOUNT_ID to Actions → Variables if you prefer.
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}              # optional; we fall back to eu-west-1 if unset
-  AWS_ACCOUNT_ID: "455921291596"                  # <-- set your real account ID here
+  AWS_REGION: ${{ vars.AWS_REGION }}      # optional; we fall back to eu-west-1
   ECR_REPO: aiml-airflow-image
 
 jobs:
@@ -42,36 +39,28 @@ jobs:
 
   build_and_push:
     runs-on: ubuntu-latest
-    needs: bandit
-    if: ${{ always() }}
     outputs:
       image_uri: ${{ steps.build.outputs.image_uri }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve region (fallback to eu-west-1)
+      - name: Resolve region (fallback)
         run: |
           REGION="${AWS_REGION:-}"
           if [ -z "$REGION" ]; then REGION="eu-west-1"; fi
           echo "REGION=$REGION" >> "$GITHUB_ENV"
 
-      - name: Debug OIDC claims (optional)
-        run: |
-          sudo apt-get update -y && sudo apt-get install -y jq
-          TOK=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
-          echo "OIDC sub:"; echo "$TOK" | awk -F. '{print $2}' | base64 -d 2>/dev/null | jq -r .sub
-
-      - name: Assume AWS role via OIDC
+      # Use static access keys from GitHub Secrets
+      - name: Configure AWS creds (static)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubOIDCRole
-          aws-region: ${{ env.REGION }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.REGION }}
 
-      - name: Compute IMAGE_URI from assumed identity
+      - name: Compute IMAGE_URI
         run: |
           ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-          echo "Assumed account: $ACCOUNT"
           echo "IMAGE_URI=$ACCOUNT.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO}" >> "$GITHUB_ENV"
 
       - uses: aws-actions/amazon-ecr-login@v2
@@ -90,19 +79,19 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build_and_push
-    if: ${{ always() }}
     steps:
-      - name: Assume AWS role via OIDC
+      - name: Configure AWS creds (static)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubOIDCRole
-          aws-region: ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
 
       - name: Restart Airflow on EC2 via SSM
         env:
           INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
-          IMAGE_URI: ${{ needs.build_and_push.outputs.image_uri }}
-          REGION: ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
+          IMAGE_URI:   ${{ needs.build_and_push.outputs.image_uri }}
+          REGION:      ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
         run: |
           aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
@@ -136,4 +125,4 @@ jobs:
               "docker ps",
               "docker logs --tail 120 airflow || true"
             ]' \
-            --region "${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}"
+            --region "$REGION"

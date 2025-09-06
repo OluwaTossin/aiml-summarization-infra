@@ -1,0 +1,36 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "EcrAuthGlobal",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    { "Sid": "EcrMutateSpecificRepo",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:CompleteLayerUpload",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:PutImage",
+        "ecr:BatchGetImage",
+        "ecr:ListImages",
+        "ecr:DescribeRepositories"
+      ],
+      "Resource": "arn:aws:ecr:eu-west-1:455921291596:repository/aiml-airflow-image"
+    },
+    { "Sid": "SsmSendCommandToAirflowInstance",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:SendCommand",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations"
+      ],
+      "Resource": [
+        "arn:aws:ec2:eu-west-1:455921291596:instance/i-00a741b99a0fef73e",
+        "arn:aws:ssm:eu-west-1:455921291596:document/AWS-RunShellScript"
+      ]
+    }
+  ]
+}

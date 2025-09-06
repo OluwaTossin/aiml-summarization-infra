@@ -46,26 +46,47 @@ resource "null_resource" "validate_oidc" {
 }
 
 # ---- Trust policy: accept pushes to branch + PR merges (case variants) ----
+# ---- Trust policy: accept pushes to branch + PR merges + environments (case variants) ----
 data "aws_iam_policy_document" "assume" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
+
     principals {
       type        = "Federated"
       identifiers = [local.gh_oidc_arn]
     }
+
+    # Standard audience for aws-actions/configure-aws-credentials
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:aud"
       values   = ["sts.amazonaws.com"]
     }
+
+    # Allow typical GitHub OIDC "sub" shapes for this repo
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${local.repo_full}:ref:${local.branch_ref}",
-        "repo:${local.repo_full_lower}:ref:${local.branch_ref}",
+        # Exact protected branch (main)
+        "repo:${local.repo_full}:ref:refs/heads/${var.github_branch}",
+        "repo:${local.repo_full_lower}:ref:refs/heads/${var.github_branch}",
+
+        # Any branch on this repo (useful during bootstrap; tighten later if desired)
+        "repo:${local.repo_full}:ref:refs/heads/*",
+        "repo:${local.repo_full_lower}:ref:refs/heads/*",
+
+        # Pull requests (GitHub emits refs/pull/*/merge)
         "repo:${local.repo_full}:ref:refs/pull/*/merge",
-        "repo:${local.repo_full_lower}:ref:refs/pull/*/merge"
+        "repo:${local.repo_full_lower}:ref:refs/pull/*/merge",
+
+        # Environments (GitHub uses environment:<Name>)
+        "repo:${local.repo_full}:environment:*",
+        "repo:${local.repo_full_lower}:environment:*",
+
+        # Legacy pattern sometimes seen in older docs
+        "repo:${local.repo_full}:pull_request",
+        "repo:${local.repo_full_lower}:pull_request"
       ]
     }
   }
