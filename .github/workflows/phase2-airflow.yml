@@ -16,11 +16,12 @@ permissions:
   id-token: write
   contents: read
 
+# Repo variables are still supported for the DAG inputs, but are now optional
 env:
+  # Optional; if empty we default to eu-west-1 inside the job
   AWS_REGION: ${{ vars.AWS_REGION }}
-  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  # The image repo name we push to (created by Terraform)
   ECR_REPO: aiml-airflow-image
-  IMAGE_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/aiml-airflow-image
 
 jobs:
   bandit:
@@ -44,11 +45,20 @@ jobs:
     runs-on: ubuntu-latest
     needs: bandit
     if: ${{ always() }}
+    outputs:
+      image_uri: ${{ steps.build.outputs.image_uri }}
     steps:
       - uses: actions/checkout@v4
 
-      # Optional: show the OIDC subject issued to this job (useful for trust debugging)
-      - name: Debug OIDC claims
+      - name: Resolve region (fallback to eu-west-1)
+        id: region
+        run: |
+          REGION="${AWS_REGION:-}"
+          if [ -z "$REGION" ]; then REGION="eu-west-1"; fi
+          echo "Resolved AWS region: $REGION"
+          echo "REGION=$REGION" >> $GITHUB_ENV
+
+      - name: Debug OIDC claims (optional)
         run: |
           sudo apt-get update -y && sudo apt-get install -y jq
           TOK=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -57,18 +67,34 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubOIDCRole
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID && vars.AWS_ACCOUNT_ID || '000000000000' }}:role/GitHubOIDCRole
+          # The action requires a region even just to get the OIDC creds;
+          # use the env we resolved above
+          aws-region: ${{ env.REGION }}
+
+      # Discover the real account ID after assuming the role
+      - name: Discover AWS account & compute IMAGE_URI
+        id: compute
+        run: |
+          set -euo pipefail
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "ACCOUNT=$ACCOUNT"
+          IMAGE_URI="$ACCOUNT.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO}"
+          echo "IMAGE_URI=$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       - uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build & Push
+        id: build
         working-directory: services/airflow
         run: |
+          set -euo pipefail
           GIT_SHA=$(git rev-parse --short HEAD)
-          docker build -t $IMAGE_URI:$GIT_SHA -t $IMAGE_URI:latest .
-          docker push $IMAGE_URI:$GIT_SHA
-          docker push $IMAGE_URI:latest
+          docker build -t "$IMAGE_URI:$GIT_SHA" -t "$IMAGE_URI:latest" .
+          docker push "$IMAGE_URI:$GIT_SHA"
+          docker push "$IMAGE_URI:latest"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
   deploy:
     runs-on: ubuntu-latest
@@ -77,13 +103,16 @@ jobs:
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubOIDCRole
+          # Reuse the same region resolution rule
+          aws-region: ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID && vars.AWS_ACCOUNT_ID || '000000000000' }}:role/GitHubOIDCRole
 
       - name: Restart Airflow on EC2 via SSM
         env:
           INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
-          IMAGE_URI: ${{ env.IMAGE_URI }}
+          # use the image uri produced by the build job
+          IMAGE_URI: ${{ needs.build_and_push.outputs.image_uri }}
+          REGION: ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
         run: |
           aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
@@ -91,12 +120,14 @@ jobs:
             --comment "Phase2 Airflow rollout" \
             --parameters commands='[
               "set -euxo pipefail",
-              "REGION='${{ env.AWS_REGION }}'",
-              "ECR_REG='${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.'$REGION'.amazonaws.com'",
+              "REGION='\''${REGION}'\'''",
+              "IMAGE_URI='\''${IMAGE_URI}'\'''",
+              # Derive ECR registry from IMAGE_URI to avoid any hard-coded account/region
+              "ECR_REG=$(echo \"${IMAGE_URI}\" | awk -F\"/\" '\''{print $1}'\'')",
               "command -v docker || (apt-get update -y && apt-get install -y docker.io || yum install -y docker)",
               "systemctl enable --now docker || true",
               "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REG",
-              "docker pull '"$IMAGE_URI"':latest",
+              "docker pull '${IMAGE_URI}':latest",
               "docker rm -f airflow || true",
               "docker volume create airflow_home || true",
               "docker volume create airflow_logs || true",
@@ -112,8 +143,8 @@ jobs:
                  -e HF_MODEL_PATH=/opt/models/sshleifer/distilbart-cnn-12-6 \
                  -v airflow_home:/opt/airflow \
                  -v airflow_logs:/opt/airflow/logs \
-                 '"$IMAGE_URI"':latest",
+                 '${IMAGE_URI}':latest",
               "docker ps",
               "docker logs --tail 120 airflow || true"
             ]' \
-            --region "${{ env.AWS_REGION }}"
+            --region "${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}"

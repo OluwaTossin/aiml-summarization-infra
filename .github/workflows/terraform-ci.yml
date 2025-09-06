@@ -6,12 +6,11 @@ on:
     branches: [ main ]
 
 permissions:
-  contents: read
+  contents: write   # needed for the auto-commit step
 
 jobs:
   lint:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -41,11 +40,10 @@ jobs:
 
       - name: Checkov (non-blocking)
         uses: bridgecrewio/checkov-action@v12
-        continue-on-error: true
         with:
           directory: .
           soft_fail: true
-          # severity_threshold: HIGH
+        continue-on-error: true
 
       - name: Terraform Validate
         run: terraform validate
