@@ -47,9 +47,9 @@ resource "aws_security_group" "airflow" {
   }
 
   tags = {
-    Name        = "${var.project_prefix}-airflow-sg"
-    Project     = var.project_prefix
-    ManagedBy   = "Terraform"
+    Name      = "${var.project_prefix}-airflow-sg"
+    Project   = var.project_prefix
+    ManagedBy = "Terraform"
   }
 }
 
@@ -84,7 +84,7 @@ resource "aws_iam_role_policy_attachment" "ecr_ro" {
 data "aws_iam_policy_document" "logs" {
   statement {
     actions = [
-      "logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents","logs:DescribeLogStreams"
+      "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"
     ]
     resources = ["*"]
   }
@@ -101,7 +101,7 @@ resource "aws_iam_role_policy_attachment" "logs" {
 # S3 access to raw and processed prefixes
 data "aws_iam_policy_document" "s3_data" {
   statement {
-    actions   = ["s3:ListBucket"]
+    actions = ["s3:ListBucket"]
     resources = [
       "arn:aws:s3:::${var.raw_bucket}",
       "arn:aws:s3:::${var.processed_bucket}"
@@ -112,7 +112,7 @@ data "aws_iam_policy_document" "s3_data" {
     resources = ["arn:aws:s3:::${var.raw_bucket}/raw/*"]
   }
   statement {
-    actions   = ["s3:GetObject","s3:PutObject"]
+    actions = ["s3:GetObject", "s3:PutObject"]
     resources = [
       "arn:aws:s3:::${var.processed_bucket}/cleaned/*",
       "arn:aws:s3:::${var.processed_bucket}/summaries/*"
@@ -150,7 +150,7 @@ resource "aws_iam_role_policy_attachment" "lambda_invoke" {
 # SSM Parameter read for admin creds
 data "aws_iam_policy_document" "ssm_params" {
   statement {
-    actions   = ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"]
+    actions = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
     resources = [
       "arn:aws:ssm:${data.aws_region.this.id}:${data.aws_caller_identity.this.account_id}:parameter${var.ssm_param_admin_user}",
       "arn:aws:ssm:${data.aws_region.this.id}:${data.aws_caller_identity.this.account_id}:parameter${var.ssm_param_admin_pwd}",
@@ -174,16 +174,16 @@ resource "aws_iam_instance_profile" "ec2" {
 
 # Private EC2 host
 resource "aws_instance" "airflow" {
-  ami                    = data.aws_ami.al2023.id
-  instance_type          = var.instance_type
-  subnet_id              = var.private_subnet_id
-  vpc_security_group_ids = [aws_security_group.airflow.id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2.name
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = var.instance_type
+  subnet_id                   = var.private_subnet_id
+  vpc_security_group_ids      = [aws_security_group.airflow.id]
+  iam_instance_profile        = aws_iam_instance_profile.ec2.name
   associate_public_ip_address = false
 
   # >>> Instance memory <<<
   root_block_device {
-    volume_size           = 30       # 30 GiB is a sensible minimum for Docker + Airflow
+    volume_size           = 30 # 30 GiB is a sensible minimum for Docker + Airflow
     volume_type           = "gp3"
     encrypted             = true
     delete_on_termination = true

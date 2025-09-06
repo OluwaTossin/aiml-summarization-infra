@@ -1,8 +1,8 @@
 terraform {
   required_providers {
-    aws    = { source = "hashicorp/aws",       version = ">= 5.0" }
+    aws    = { source = "hashicorp/aws", version = ">= 5.0" }
     github = { source = "integrations/github", version = ">= 6.0" }
-    tls    = { source = "hashicorp/tls",       version = ">= 4.0" }
+    tls    = { source = "hashicorp/tls", version = ">= 4.0" }
   }
 }
 
@@ -79,8 +79,8 @@ resource "aws_iam_role" "github_oidc_role" {
 # -------- Least-privilege policy: ECR push for a specific repo + SSM SendCommand to a specific instance --------
 data "aws_iam_policy_document" "inline" {
   statement {
-    sid      = "EcrAuthGlobal"
-    actions  = ["ecr:GetAuthorizationToken"]
+    sid       = "EcrAuthGlobal"
+    actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]
   }
 
