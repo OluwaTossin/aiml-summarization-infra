@@ -1,17 +1,17 @@
 terraform {
   required_providers {
-    aws    = { source = "hashicorp/aws",       version = ">= 5.0" }
+    aws    = { source = "hashicorp/aws", version = ">= 5.0" }
     github = { source = "integrations/github", version = ">= 6.0" }
-    tls    = { source = "hashicorp/tls",       version = ">= 4.0" }
+    tls    = { source = "hashicorp/tls", version = ">= 4.0" }
   }
 }
 
 # ---- Canonical repo identifiers (define ONCE) ----
 locals {
-  repo_full        = "${var.github_owner}/${var.github_repo}"                # e.g., OluwaTossin/aiml-summarization-infra
-  repo_full_lower  = "${lower(var.github_owner)}/${lower(var.github_repo)}" # lower-case variant
-  branch_ref       = "refs/heads/${var.github_branch}"                       # e.g., refs/heads/main
-  ecr_repo_name    = var.ecr_repo_name
+  repo_full       = "${var.github_owner}/${var.github_repo}"               # e.g., OluwaTossin/aiml-summarization-infra
+  repo_full_lower = "${lower(var.github_owner)}/${lower(var.github_repo)}" # lower-case variant
+  branch_ref      = "refs/heads/${var.github_branch}"                      # e.g., refs/heads/main
+  ecr_repo_name   = var.ecr_repo_name
 }
 
 data "aws_caller_identity" "this" {}
