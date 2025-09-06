@@ -82,7 +82,7 @@ jobs:
           docker push "$IMAGE_URI:latest"
           echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
-  deploy:
+    deploy:
     runs-on: ubuntu-latest
     needs: build_and_push
     steps:
@@ -95,23 +95,32 @@ jobs:
 
       - name: Restart Airflow on EC2 via SSM
         env:
-          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
-          IMAGE_URI:   ${{ needs.build_and_push.outputs.image_uri }}
-          REGION:      ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
+          INSTANCE_ID:      ${{ vars.EC2_INSTANCE_ID }}
+          REGION:           ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
+          IMAGE_URI:        ${{ needs.build_and_push.outputs.image_uri }}
+          RAW_BUCKET:       ${{ vars.RAW_BUCKET }}
+          PROCESSED_BUCKET: ${{ vars.PROCESSED_BUCKET }}
+          S3_INPUT_PREFIX:  ${{ vars.S3_INPUT_PREFIX }}
+          S3_OUTPUT_PREFIX: ${{ vars.S3_OUTPUT_PREFIX }}
         run: |
-          aws ssm send-command \
-            --instance-ids "$INSTANCE_ID" \
-            --document-name "AWS-RunShellScript" \
-            --comment "Phase2 Airflow rollout" \
-            --parameters commands='[
+          set -euo pipefail
+
+          # Build a clean SSM payload with placeholders, then replace.
+          cat > payload.json <<'JSON'
+          {
+            "commands": [
               "set -euxo pipefail",
-              "REGION='\''${REGION}'\'''",
-              "IMAGE_URI='\''${IMAGE_URI}'\'''",
-              "ECR_REG=$(echo \"${IMAGE_URI}\" | awk -F\"/\" '\''{print $1}'\'')",
+              "REGION=__REGION__",
+              "IMAGE_URI=__IMAGE_URI__",
+              "RAW_BUCKET=__RAW__",
+              "PROCESSED_BUCKET=__PROCESSED__",
+              "S3_INPUT_PREFIX=__INP__",
+              "S3_OUTPUT_PREFIX=__OUT__",
+              "ECR_REG=${IMAGE_URI%%/*}",
               "command -v docker || (apt-get update -y && apt-get install -y docker.io || yum install -y docker)",
               "systemctl enable --now docker || true",
               "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REG",
-              "docker pull '${IMAGE_URI}':latest",
+              "docker pull ${IMAGE_URI}:latest",
               "docker rm -f airflow || true",
               "docker volume create airflow_home || true",
               "docker volume create airflow_logs || true",
@@ -120,15 +129,33 @@ jobs:
                  -e AIRFLOW_ADMIN_PWD=$(aws ssm get-parameter --with-decryption --name /airflow/admin_pwd --region $REGION --query Parameter.Value --output text) \
                  -e AIRFLOW_ADMIN_EMAIL=admin@example.com \
                  -e AIRFLOW__CORE__LOAD_EXAMPLES=False \
-                 -e RAW_BUCKET=${{ vars.RAW_BUCKET }} \
-                 -e PROCESSED_BUCKET=${{ vars.PROCESSED_BUCKET }} \
-                 -e S3_INPUT_PREFIX=${{ vars.S3_INPUT_PREFIX }} \
-                 -e S3_OUTPUT_PREFIX=${{ vars.S3_OUTPUT_PREFIX }} \
+                 -e RAW_BUCKET=$RAW_BUCKET \
+                 -e PROCESSED_BUCKET=$PROCESSED_BUCKET \
+                 -e S3_INPUT_PREFIX=$S3_INPUT_PREFIX \
+                 -e S3_OUTPUT_PREFIX=$S3_OUTPUT_PREFIX \
                  -e HF_MODEL_PATH=/opt/models/sshleifer/distilbart-cnn-12-6 \
                  -v airflow_home:/opt/airflow \
                  -v airflow_logs:/opt/airflow/logs \
-                 '${IMAGE_URI}':latest",
+                 ${IMAGE_URI}:latest",
               "docker ps",
               "docker logs --tail 120 airflow || true"
-            ]' \
-            --region "$REGION"
+            ]
+          }
+          JSON
+
+          # Replace placeholders with actual values on the runner (no escaping headaches).
+          sed -i "s|__REGION__|${REGION}|g"        payload.json
+          sed -i "s|__IMAGE_URI__|${IMAGE_URI}|g"  payload.json
+          sed -i "s|__RAW__|${RAW_BUCKET}|g"       payload.json
+          sed -i "s|__PROCESSED__|${PROCESSED_BUCKET}|g" payload.json
+          sed -i "s|__INP__|${S3_INPUT_PREFIX}|g"  payload.json
+          sed -i "s|__OUT__|${S3_OUTPUT_PREFIX}|g" payload.json
+
+          # Send to the instance
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Phase2 Airflow rollout" \
+            --parameters file://payload.json \
+            --region "$REGION" \
+            --output text
