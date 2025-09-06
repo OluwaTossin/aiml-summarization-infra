@@ -50,6 +50,12 @@ jobs:
           if [ -z "$REGION" ]; then REGION="eu-west-1"; fi
           echo "REGION=$REGION" >> "$GITHUB_ENV"
 
+      - name: Preflight — check secrets presence
+        run: |
+            [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || { echo "::error::Missing repo secret AWS_ACCESS_KEY_ID"; exit 1; }
+            [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] || { echo "::error::Missing repo secret AWS_SECRET_ACCESS_KEY"; exit 1; }
+
+
       # Use static access keys from GitHub Secrets
       - name: Configure AWS creds (static)
         uses: aws-actions/configure-aws-credentials@v4
