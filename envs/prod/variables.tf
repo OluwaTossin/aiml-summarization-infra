@@ -29,7 +29,7 @@ variable "create_vpc_endpoints" {
 }
 
 variable "allowed_admin_cidrs" {
-  description = "List of CIDR blocks permitted to reach Airflow UI (8080). Empty = no public ingress."
+  description = "CIDR blocks permitted to reach Airflow UI (8080). Empty = no public ingress."
   type        = list(string)
   default     = []
 }
@@ -39,6 +39,7 @@ variable "iam_s3_bucket_arns" {
   type        = list(string)
   default     = []
 }
+
 variable "use_kms" {
   description = "Create and use a KMS CMK for S3 and log groups"
   type        = bool
@@ -62,7 +63,76 @@ variable "log_retention_days" {
   type        = number
   default     = 30
 }
-variable "github_repo" {
-  description = "GitHub org/repo for OIDC trust"
+
+# Use these when reusing an existing VPC/subnets
+variable "vpc_id" {
+  description = "Existing VPC ID"
   type        = string
+}
+
+variable "private_subnet_ids" {
+  description = "Private subnet IDs in the existing VPC"
+  type        = list(string)
+}
+
+# ---------- CI/CD & OIDC wiring ----------
+variable "aws_region" {
+  description = "AWS Region"
+  type        = string
+}
+
+variable "github_owner" {
+  description = "GitHub org/user name (e.g., OluwaTossin)"
+  type        = string
+}
+
+variable "github_repo" {
+  description = "GitHub repository name (e.g., AIML-SUMMARIZATION-INFRA)"
+  type        = string
+}
+
+variable "github_branch" {
+  description = "Branch for OIDC trust"
+  type        = string
+  default     = "main"
+}
+
+variable "role_name" {
+  description = "Name of the GitHub OIDC role"
+  type        = string
+  default     = "GitHubOIDCRole"
+}
+
+variable "ecr_repo_name" {
+  description = "ECR repository for Airflow image"
+  type        = string
+  default     = "aiml/airflow"
+}
+
+variable "ec2_instance_id" {
+  description = "Airflow EC2 instance ID (target for SSM deploy)"
+  type        = string
+}
+
+# ---------- Data flow parameters ----------
+variable "raw_bucket" {
+  description = "S3 bucket for raw inputs"
+  type        = string
+}
+
+variable "processed_bucket" {
+  description = "S3 bucket for summarized outputs (and preprocessed if you reuse the same bucket)"
+  type        = string
+}
+
+variable "s3_input_prefix" {
+  description = "Prefix for raw inputs"
+  type        = string
+  default     = "raw/"
+}
+
+variable "s3_output_prefix" {
+  description = "Prefix for processed outputs"
+  type        = string
+  default     = "processed/"
 }

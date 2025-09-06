@@ -20,7 +20,7 @@ module "s3_data" {
   source                 = "../../modules/s3"
   project_prefix         = var.project_prefix
   explicit_bucket_name   = var.data_bucket_name
-  kms_key_arn            = coalesce(module.kms.kms_key_arn, "")
+  kms_key_arn            = var.use_kms ? module.kms.kms_key_arn : null
   versioning_enabled     = true
   noncurrent_expire_days = 90
 }
@@ -30,7 +30,7 @@ module "logs" {
   project_prefix  = var.project_prefix
   log_group_names = var.log_group_names
   retention_days  = var.log_retention_days
-  kms_key_arn     = coalesce(module.kms.kms_key_arn, "")
+  kms_key_arn     = var.use_kms ? module.kms.kms_key_arn : null
 }
 
 
@@ -79,4 +79,20 @@ module "ecr" {
 
   # Keep last N images to control storage/cost
   retain_images = 10
+}
+
+module "airflow_ec2" {
+  source = "../../modules/airflow_ec2"
+
+  project_prefix    = var.project_prefix
+  vpc_id            = var.vpc_id
+  private_subnet_id = var.private_subnet_ids[0]
+  instance_type     = "t3.micro"
+
+  image_uri      = "455921291596.dkr.ecr.eu-west-1.amazonaws.com/aiml-airflow-image:dev"
+  log_group_name = "/aiml/prod/airflow"
+
+  raw_bucket       = var.raw_bucket
+  processed_bucket = var.processed_bucket
+
 }

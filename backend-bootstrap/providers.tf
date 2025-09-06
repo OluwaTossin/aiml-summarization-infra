@@ -14,7 +14,6 @@ terraform {
 }
 
 provider "aws" {
-  # region intentionally omitted to use your default profile/region
 }
 
 provider "random" {}
