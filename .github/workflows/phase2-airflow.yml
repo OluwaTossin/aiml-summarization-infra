@@ -16,7 +16,9 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}      # optional; fallback handled below
+  # Optional; we’ll fall back to eu-west-1 if the repo variable is unset.
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  # ECR repository name created by Terraform (module output showed “aiml-airflow-image”)
   ECR_REPO: aiml-airflow-image
 
 jobs:
@@ -40,8 +42,8 @@ jobs:
   build_and_push:
     runs-on: ubuntu-latest
     outputs:
-      image_uri: ${{ steps.build.outputs.image_uri }}
-      image_tag: ${{ steps.build.outputs.image_tag }}
+      image_repo: ${{ steps.compute.outputs.image_repo }}
+      image_ref:  ${{ steps.build.outputs.image_ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -51,9 +53,9 @@ jobs:
           if [ -z "$REGION" ]; then REGION="eu-west-1"; fi
           echo "REGION=$REGION" >> "$GITHUB_ENV"
 
-      - name: Preflight — check secrets presence
+      - name: Preflight — check required secrets
         run: |
-          [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || { echo "::error::Missing repo secret AWS_ACCESS_KEY_ID"; exit 1; }
+          [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ]     || { echo "::error::Missing repo secret AWS_ACCESS_KEY_ID"; exit 1; }
           [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] || { echo "::error::Missing repo secret AWS_SECRET_ACCESS_KEY"; exit 1; }
 
       - name: Configure AWS creds (static)
@@ -63,23 +65,28 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.REGION }}
 
-      - name: Compute IMAGE_URI
+      - name: Compute image repo URI
+        id: compute
         run: |
           ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-          echo "IMAGE_URI=$ACCOUNT.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO}" >> "$GITHUB_ENV"
+          echo "image_repo=$ACCOUNT.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO}" >> "$GITHUB_OUTPUT"
 
       - uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & Push (SHA tag only)
+      - name: Build & Push (SHA tag only; no :latest because repo is immutable)
         id: build
         working-directory: services/airflow
+        env:
+          IMAGE_REPO: ${{ steps.compute.outputs.image_repo }}
         run: |
           set -euo pipefail
-          IMAGE_TAG=$(git rev-parse --short HEAD)
-          docker build -t "$IMAGE_URI:$IMAGE_TAG" .
-          docker push "$IMAGE_URI:$IMAGE_TAG"
-          echo "image_uri=$IMAGE_URI"  >> "$GITHUB_OUTPUT"
-          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          GIT_SHA=$(git rev-parse --short HEAD)
+          IMAGE_REF="${IMAGE_REPO}:${GIT_SHA}"
+
+          docker build -t "$IMAGE_REF" .
+          docker push  "$IMAGE_REF"
+
+          echo "image_ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
 
   deploy:
     runs-on: ubuntu-latest
@@ -96,7 +103,7 @@ jobs:
         env:
           INSTANCE_ID:      ${{ vars.EC2_INSTANCE_ID }}
           REGION:           ${{ env.AWS_REGION != '' && env.AWS_REGION || 'eu-west-1' }}
-          IMAGE_REF:        ${{ needs.build_and_push.outputs.image_uri }}:${{ needs.build_and_push.outputs.image_tag }}
+          IMAGE_REF:        ${{ needs.build_and_push.outputs.image_ref }}
           RAW_BUCKET:       ${{ vars.RAW_BUCKET }}
           PROCESSED_BUCKET: ${{ vars.PROCESSED_BUCKET }}
           S3_INPUT_PREFIX:  ${{ vars.S3_INPUT_PREFIX }}
@@ -104,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Build a clean SSM payload with placeholders, then replace.
+          # Build a clean JSON payload (each command is a single line; no trailing backslashes).
           cat > payload.json <<'JSON'
           {
             "commands": [
@@ -112,44 +119,33 @@ jobs:
               "REGION=__REGION__",
               "IMAGE_REF=__IMAGE_REF__",
               "RAW_BUCKET=__RAW__",
-              "PROCESSED_BUCKET=__PROCESSED__",
+              "PROCESSED_BUCKET=__PROC__",
               "S3_INPUT_PREFIX=__INP__",
               "S3_OUTPUT_PREFIX=__OUT__",
-              "ECR_REG=${IMAGE_REF%%/*}",
+              "ECR_REG=$(echo \"$IMAGE_REF\" | awk -F\"/\" '{print $1}')",
               "command -v docker || (apt-get update -y && apt-get install -y docker.io || yum install -y docker)",
               "systemctl enable --now docker || true",
               "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REG",
-              "docker pull ${IMAGE_REF}",
               "docker rm -f airflow || true",
               "docker volume create airflow_home || true",
               "docker volume create airflow_logs || true",
-              "docker run -d --name airflow -p 8080:8080 \
-                 -e AIRFLOW_ADMIN_USER=admin \
-                 -e AIRFLOW_ADMIN_PWD=$(aws ssm get-parameter --with-decryption --name /airflow/admin_pwd --region $REGION --query Parameter.Value --output text) \
-                 -e AIRFLOW_ADMIN_EMAIL=admin@example.com \
-                 -e AIRFLOW__CORE__LOAD_EXAMPLES=False \
-                 -e RAW_BUCKET=$RAW_BUCKET \
-                 -e PROCESSED_BUCKET=$PROCESSED_BUCKET \
-                 -e S3_INPUT_PREFIX=$S3_INPUT_PREFIX \
-                 -e S3_OUTPUT_PREFIX=$S3_OUTPUT_PREFIX \
-                 -e HF_MODEL_PATH=/opt/models/sshleifer/distilbart-cnn-12-6 \
-                 -v airflow_home:/opt/airflow \
-                 -v airflow_logs:/opt/airflow/logs \
-                 ${IMAGE_REF}",
+              "docker pull ${IMAGE_REF}",
+              "docker run -d --name airflow -p 8080:8080 -e AIRFLOW_ADMIN_USER=admin -e AIRFLOW_ADMIN_PWD=$(aws ssm get-parameter --with-decryption --name /airflow/admin_pwd --region $REGION --query Parameter.Value --output text) -e AIRFLOW_ADMIN_EMAIL=admin@example.com -e AIRFLOW__CORE__LOAD_EXAMPLES=False -e RAW_BUCKET=$RAW_BUCKET -e PROCESSED_BUCKET=$PROCESSED_BUCKET -e S3_INPUT_PREFIX=$S3_INPUT_PREFIX -e S3_OUTPUT_PREFIX=$S3_OUTPUT_PREFIX -e HF_MODEL_PATH=/opt/models/sshleifer/distilbart-cnn-12-6 -v airflow_home:/opt/airflow -v airflow_logs:/opt/airflow/logs ${IMAGE_REF}",
               "docker ps",
               "docker logs --tail 120 airflow || true"
             ]
           }
           JSON
 
-          # Substitute placeholders.
-          sed -i "s|__REGION__|${REGION}|g"          payload.json
-          sed -i "s|__IMAGE_REF__|${IMAGE_REF}|g"    payload.json
-          sed -i "s|__RAW__|${RAW_BUCKET}|g"         payload.json
-          sed -i "s|__PROCESSED__|${PROCESSED_BUCKET}|g" payload.json
-          sed -i "s|__INP__|${S3_INPUT_PREFIX}|g"    payload.json
-          sed -i "s|__OUT__|${S3_OUTPUT_PREFIX}|g"   payload.json
+          # Substitute placeholders (safe; avoids JSON escaping headaches).
+          sed -i "s|__REGION__|${REGION}|g"            payload.json
+          sed -i "s|__IMAGE_REF__|${IMAGE_REF}|g"      payload.json
+          sed -i "s|__RAW__|${RAW_BUCKET}|g"           payload.json
+          sed -i "s|__PROC__|${PROCESSED_BUCKET}|g"    payload.json
+          sed -i "s|__INP__|${S3_INPUT_PREFIX}|g"      payload.json
+          sed -i "s|__OUT__|${S3_OUTPUT_PREFIX}|g"     payload.json
 
+          # Send to the instance
           aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
